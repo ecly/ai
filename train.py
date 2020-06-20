@@ -19,7 +19,7 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
-        self.dropout1 = nn.Dropout2d(0.25)
+        self.dropout1 = nn.Dropout2d(0.5)
         self.fc1 = nn.Linear(9216, 128)
 
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
@@ -51,7 +51,7 @@ def validate(model, criterion, valid_loader):
         for x, y_ref in tqdm(valid_loader, desc="Validating", leave=False):
             x, y_ref = x.to(DEVICE), y_ref.to(DEVICE)
             y_pred = model(x.to(DEVICE))
-            total_loss = criterion(y_pred, y_ref, reduction="sum").item()
+            total_loss += criterion(y_pred, y_ref, reduction="sum").item()
             pred = y_pred.argmax(dim=1, keepdim=True)
             total_correct += pred.eq(y_ref.view_as(pred)).sum().item()
 
@@ -61,23 +61,19 @@ def validate(model, criterion, valid_loader):
             avg_loss, total_correct, total_valid
         )
     )
+    return avg_loss
 
 
 def train(
-    model,
-    optimizer,
-    train_loader,
-    valid_loader,
-    epochs=10,
-    log_interval=100,
-    validate_every=1000,
+    model, optimizer, train_loader, valid_loader, max_epochs=10, log_interval=100,
 ):
     """Start training"""
     # run one epoch
     batch_size = train_loader.batch_size
     dataset_size = len(train_loader.dataset)
     start = time.time()
-    for epoch in range(epochs):
+    prev_val_loss = float("inf")
+    for epoch in range(max_epochs):
         losses = []
         for idx, (x, y_ref) in enumerate(train_loader):
             x, y_ref = x.to(DEVICE), y_ref.to(DEVICE)
@@ -94,15 +90,25 @@ def train(
             if idx % log_interval == 0:
                 elapsed = int(time.time() - start)
                 print(
-                        "Epoch: {} [{:<5}/{:<5}] Elapsed {:03d}s Loss: {:.2f} Avg. Loss: {:.2f}".format(
-                        epoch, idx * batch_size, dataset_size, elapsed, loss.item(), mean(losses)
+                    "Epoch: {} [{:<5}/{:<5}] Elapsed {:03d}s Loss: {:.2f} Avg. Loss: {:.2f}".format(
+                        epoch,
+                        idx * batch_size,
+                        dataset_size,
+                        elapsed,
+                        loss.item(),
+                        mean(losses),
                     )
                 )
 
-            if idx > 0 and idx % validate_every == 0:
-                validate(model, F.nll_loss, valid_loader)
-
-        validate(model, F.nll_loss, valid_loader)
+        val_loss = validate(model, F.nll_loss, valid_loader)
+        if val_loss > prev_val_loss:
+            print(
+                "Prev. validatiion loss {:2f} < curr. validation loss {:2f}".format(
+                    prev_val_loss, val_loss
+                )
+            )
+            break
+        prev_val_loss = val_loss
 
 
 def get_mnist(batch_size, workers):
