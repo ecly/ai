@@ -1,4 +1,4 @@
-# pylint: disable=invalid-name,missing-docstring,missing-class-docstring,arguments-differ
+# pylint: disable=invalid-name,missing-docstring,missing-class-docstring,arguments-differ,C0330,too-many-locals
 """Partially based on: https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html"""
 import argparse
 import torch
@@ -83,7 +83,7 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
     def forward(self, x):
         return self.g(x)
 
-    def training_step(self, batch, _batch_idx, optimizer_idx): # pylint: disable=too-many-locals
+    def training_step(self, batch, _batch_idx, optimizer_idx):
         real_x, _ = batch
         b_size = real_x.size(0)
         device = torch.device("cuda" if self.on_gpu else "cpu")

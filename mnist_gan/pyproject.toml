@@ -1,15 +1,14 @@
 [tool.poetry]
 name = "mnist_gan"
 version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
+description = "Small DCGAN implementation on MNIST"
+authors = ["Emil Lynegaard"]
 license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-torchvision = "0.6.1"
-numpy = "1.18.5"
-matplotlib = "3.1.2"
+torch = "~1.5.1"
+torchvision = "~0.6.1"
 pytorch-lightning = "0.8.1"
 
 [tool.poetry.dev-dependencies]
