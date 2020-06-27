@@ -1,11 +1,6 @@
-# pylint: disable=invalid-name,missing-docstring,missing-class-docstring,arguments-differ,too-many-instance-attributes,too-many-locals
-"""
-Partially based on:
-    https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html
-"""
+# pylint: disable=invalid-name,missing-docstring,missing-class-docstring,arguments-differ
+"""Partially based on: https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html"""
 import argparse
-import random
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -88,7 +83,7 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
     def forward(self, x):
         return self.g(x)
 
-    def training_step(self, batch, _batch_idx, optimizer_idx):
+    def training_step(self, batch, _batch_idx, optimizer_idx): # pylint: disable=too-many-locals
         real_x, _ = batch
         b_size = real_x.size(0)
         device = torch.device("cuda" if self.on_gpu else "cpu")
@@ -120,7 +115,7 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
         return {"loss": err_g, "progress_bar": log_dict, "log": log_dict}
 
     def configure_optimizers(self):
-        """For GAN we return two optimizer - order matters as we get `optimizer_idx` in train step"""
+        """For GANs we return two optimizer, order coupled with train step"""
         optimizer_d = Adam(
             self.d.parameters(),
             lr=self.hparams.lr,
