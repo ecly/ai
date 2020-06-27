@@ -1,175 +1,149 @@
-import time
+# pylint: disable=invalid-name,missing-docstring,missing-class-docstring,arguments-differ,C0330,too-many-locals,too-many-ancestors,too-many-instance-attributes
+import os
 import argparse
-from statistics import mean
-from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-import torch.utils.data.distributed
 from torchvision import datasets, transforms
+import pytorch_lightning as pl
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# pylint: disable=C0330
-
-
-def conv2d_size_out(size, kernel_size, stride):
-    return (size - (kernel_size - 1) - 1) // stride + 1
+_FILE_PATH = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DATA_PATH = os.path.join(_FILE_PATH, "..", "data")
 
 
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, 3, 1)
-        self.dropout1 = nn.Dropout2d(0.5)
-        self.fc1 = nn.Linear(9216, 128)
+class Classifier(pl.LightningModule):
+    def __init__(self, hparams):
+        super(Classifier, self).__init__()
+        self.hparams = hparams
 
-        self.conv2 = nn.Conv2d(32, 64, 3, 1)
-        self.dropout2 = nn.Dropout2d(0.5)
-        self.fc2 = nn.Linear(128, 10)
-
-    def forward(self, x):  # pylint: disable=arguments-differ
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2)
-        x = self.dropout1(x)
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.dropout2(x)
-        x = self.fc2(x)
-        output = F.log_softmax(x, dim=1)
-        return output
-
-
-def validate(model, criterion, valid_loader):
-    model.eval()
-    total_loss = 0
-    total_correct = 0
-    total_valid = len(valid_loader.dataset)
-    with torch.no_grad():
-        for x, y_ref in tqdm(valid_loader, desc="Validating", leave=False):
-            x, y_ref = x.to(DEVICE), y_ref.to(DEVICE)
-            y_pred = model(x.to(DEVICE))
-            total_loss += criterion(y_pred, y_ref, reduction="sum").item()
-            pred = y_pred.argmax(dim=1, keepdim=True)
-            total_correct += pred.eq(y_ref.view_as(pred)).sum().item()
-
-    avg_loss = total_loss / total_valid
-    print(
-        "Avg. validation loss {:.2f}, Correct predictions {}/{}:".format(
-            avg_loss, total_correct, total_valid
+        self.main = nn.Sequential(
+            # batch x (nc) x IMAGE_SIZE x IMAGE_SIZE
+            nn.Conv2d(hparams.nc, hparams.nf, 4, 2, 1),
+            # batch x (nf) x IMAGE_SIZE//2 x IMAGE_SIZE//2
+            nn.ELU(),
+            nn.MaxPool2d(2),
+            # batch x (nf) x IMAGE_SIZE//4 x IMAGE_SIZE//4
+            nn.Conv2d(hparams.nf, hparams.nf * 2, 4, 2, 1),
+            # batch x (nf * 4) x IMAGE_SIZE//8 x IMAGE_SIZE//8
+            nn.ELU(),
+            nn.MaxPool2d(2),
+            # batch x (nf * 4) x IMAGE_SIZE//16 x IMAGE_SIZE//16
+            nn.Dropout2d(p=0.5),
+            nn.Flatten(),
+            nn.Linear(
+                hparams.nf
+                * 2
+                * (hparams.image_size // 16)
+                * (hparams.image_size // 16),
+                10,
+            ),
+            nn.LogSoftmax(dim=1),
         )
-    )
-    return avg_loss
+        self.criterion = F.nll_loss
+
+    def forward(self, x):
+        return self.main(x)
+
+    def training_step(self, batch, _batch_idx):
+        x, y_ref = batch
+        y_pred = self(x)
+        loss = self.criterion(y_pred, y_ref)
+        return {"loss": loss, "log": {"train_loss": loss}}
+
+    def validation_step(self, batch, _batch_idx):
+        x, y_ref = batch
+        y_pred = self(x)
+        val_loss = self.criterion(y_pred, y_ref)
+        pred = y_pred.argmax(dim=1, keepdim=True)
+        total_correct = pred.eq(y_ref.view_as(pred)).sum().item()
+        return {
+            "val_loss": val_loss,
+            "total_correct": total_correct,
+            "total": y_ref.size(0),
+        }
+
+    def validation_epoch_end(self, outputs):
+        val_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        total_correct = sum(x["total_correct"] for x in outputs)
+        total = sum(x["total"] for x in outputs)
+        val_accuracy = total_correct / total
+        log = {"val_loss": val_loss, "val_accuracy": val_accuracy}
+        return {"log": log, "val_loss": val_loss}
+
+    def configure_optimizers(self):
+        return Adam(self.parameters(), lr=self.hparams.lr)
+
+    def train_dataloader(self):
+        """Implicit PyTorch Lightning train dataloader definition"""
+        train_set = datasets.MNIST(
+            self.hparams.data,
+            train=True,
+            download=True,
+            transform=transforms.Compose(
+                [
+                    transforms.Resize(self.hparams.image_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(0.5, 0.5),
+                ]
+            ),
+        )
+        return DataLoader(
+            train_set,
+            batch_size=self.hparams.batch_size,
+            shuffle=True,
+            num_workers=self.hparams.workers,
+        )
+
+    def val_dataloader(self):
+        """Implicit PyTorch Lightning valid dataloader definition"""
+        valid_set = datasets.MNIST(
+            self.hparams.data,
+            train=False,
+            download=True,
+            transform=transforms.Compose(
+                [
+                    transforms.Resize(self.hparams.image_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(0.5, 0.5),
+                ]
+            ),
+        )
+        return DataLoader(
+            valid_set,
+            batch_size=self.hparams.batch_size,
+            shuffle=False,
+            num_workers=self.hparams.workers,
+        )
 
 
-def train(
-    model, optimizer, train_loader, valid_loader, max_epochs=10, log_interval=100,
-):
-    """Start training"""
-    # run one epoch
-    batch_size = train_loader.batch_size
-    dataset_size = len(train_loader.dataset)
-    start = time.time()
-    prev_val_loss = float("inf")
-    for epoch in range(max_epochs):
-        losses = []
-        for idx, (x, y_ref) in enumerate(train_loader):
-            x, y_ref = x.to(DEVICE), y_ref.to(DEVICE)
-
-            # make sure gradients are zeroed before model is applied to x
-            optimizer.zero_grad()
-
-            y_pred = model(x)
-            loss = F.nll_loss(y_pred, y_ref)
-            loss.mean().backward()
-            losses.append(loss.item())
-            optimizer.step()
-
-            if idx % log_interval == 0:
-                elapsed = int(time.time() - start)
-                print(
-                    "Epoch: {} [{:<5}/{:<5}] Elapsed {:03d}s Loss: {:.2f} Avg. Loss: {:.2f}".format(
-                        epoch,
-                        idx * batch_size,
-                        dataset_size,
-                        elapsed,
-                        loss.item(),
-                        mean(losses),
-                    )
-                )
-
-        val_loss = validate(model, F.nll_loss, valid_loader)
-        if val_loss > prev_val_loss:
-            print(
-                "Prev. validatiion loss {:2f} < curr. validation loss {:2f}".format(
-                    prev_val_loss, val_loss
-                )
-            )
-            break
-        prev_val_loss = val_loss
-
-
-def get_mnist(batch_size, workers):
-    train_set = datasets.MNIST(
-        "../data",
-        train=True,
-        download=True,
-        transform=transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-        ),
-    )
-    train_loader = DataLoader(
-        train_set, batch_size=batch_size, shuffle=True, num_workers=workers
-    )
-
-    valid_set = datasets.MNIST(
-        "../data",
-        train=False,
-        transform=transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-        ),
-    )
-    valid_loader = DataLoader(
-        valid_set, batch_size=batch_size, shuffle=False, num_workers=workers
-    )
-    return train_loader, valid_loader
-
-
-def prepare_arg_parser():
-    """Create arg parser handling input/output and training conditions"""
+def arg_parser():
     parser = argparse.ArgumentParser(description="Trains an experimental model...")
-    parser.add_argument(
-        "-lr", "--learning-rate", default=0.01, type=float, help="learning rate"
-    )
-    parser.add_argument("--batch-size", default=160, type=int, help="mini batch size")
+    parser.add_argument("-lr", default=0.0002, type=float, help="learning rate")
+    parser.add_argument("--batch-size", default=256, type=int, help="mini batch size")
     parser.add_argument("--seed", default=42, type=float, help="seed for randomness")
-    parser.add_argument(
-        "--workers", default=8, type=int, help="number of data loading workers",
-    )
+    parser.add_argument("--workers", default=4, type=int, help="workers for dataloader")
+    parser.add_argument("--data", default=DEFAULT_DATA_PATH, type=str)
+    parser.add_argument("--nc", default=1, type=int, help="channels in input data")
+    parser.add_argument("--nf", default=64, type=int, help="features for conv model")
+    parser.add_argument("--image-size", default=28, type=int, help="image resizing")
 
     return parser
 
 
 def main():
-    """Build dataset according to args and train model"""
-    arg_parser = prepare_arg_parser()
-    args = arg_parser.parse_args()
-
-    torch.manual_seed(args.seed)
-    train_loader, valid_loader = get_mnist(args.batch_size, args.workers)
-
-    model = Model()
-    # model = torch.nn.parallel.DataParallel(model)
-    model = model.to(DEVICE)
-
-    optimizer = Adam(model.parameters(), lr=args.learning_rate)
-    train(model, optimizer, train_loader, valid_loader)
+    parser = arg_parser()
+    parser = pl.Trainer.add_argparse_args(parser)
+    args = parser.parse_args()
+    pl.seed_everything(args.seed)
+    classifier = Classifier(args)
+    trainer = pl.Trainer.from_argparse_args(
+        args,
+        row_log_interval=1,
+        early_stop_callback=pl.callbacks.EarlyStopping(patience=3),
+    )
+    trainer.fit(classifier)
 
 
 if __name__ == "__main__":
