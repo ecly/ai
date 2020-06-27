@@ -17,8 +17,6 @@ import pytorch_lightning as pl
 
 
 IMAGE_SIZE = 32
-REAL_LABEL = 1
-FAKE_LABEL = 0
 
 
 class Generator(nn.Module):
@@ -28,34 +26,25 @@ class Generator(nn.Module):
 
         self.main = nn.Sequential(
             # input is latent vector Z, going into a convolution
-            nn.ConvTranspose2d(hparams.nz, hparams.ngf * 4, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(hparams.nz, hparams.ngf * 4, 4, 1, 0),
             nn.BatchNorm2d(hparams.ngf * 4),
-            nn.ReLU(True),
+            nn.ELU(),
             # state size. (ngf*4) x 4 x 4
-            nn.ConvTranspose2d(hparams.ngf * 4, hparams.ngf * 2, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(hparams.ngf * 4, hparams.ngf * 2, 4, 2, 1),
             nn.BatchNorm2d(hparams.ngf * 2),
-            nn.ReLU(True),
+            nn.ELU(),
             # state size. (ngf*2) x 8 x 8
-            nn.ConvTranspose2d(hparams.ngf * 2, hparams.ngf, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(hparams.ngf * 2, hparams.ngf, 4, 2, 1),
             nn.BatchNorm2d(hparams.ngf),
-            nn.ReLU(True),
+            nn.ELU(),
             # state size. (ngf) x 16 x 16
-            nn.ConvTranspose2d(hparams.ngf, hparams.nc, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(hparams.ngf, hparams.nc, 4, 2, 1),
             nn.Tanh()
             # state size. (nc) x 32 x 32
         )
 
     def forward(self, x):
         return self.main(x)
-
-
-class Debug(nn.Module):
-    def __init__(self):
-        super(Debug, self).__init__()
-
-    def forward(self, x):
-        breakpoint()
-        return x
 
 
 class Discriminator(nn.Module):
@@ -65,19 +54,19 @@ class Discriminator(nn.Module):
 
         self.main = nn.Sequential(
             # input size. (nc) x 32 x 32
-            nn.Conv2d(hparams.nc, hparams.ndf, 4, 2, 1, bias=False),
+            nn.Conv2d(hparams.nc, hparams.ndf, 4, 2, 1),
             nn.BatchNorm2d(hparams.ndf),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ELU(),
             # state size. (ndf) x 16 x 16
-            nn.Conv2d(hparams.ndf, hparams.ndf * 2, 4, 2, 1, bias=False),
+            nn.Conv2d(hparams.ndf, hparams.ndf * 2, 4, 2, 1),
             nn.BatchNorm2d(hparams.ndf * 2),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ELU(),
             # state size. (ndf*2) x 8 x 8
-            nn.Conv2d(hparams.ndf * 2, hparams.ndf * 4, 4, 2, 1, bias=False),
+            nn.Conv2d(hparams.ndf * 2, hparams.ndf * 4, 4, 2, 1),
             nn.BatchNorm2d(hparams.ndf * 4),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ELU(),
             # state size. (ndf*4) x 4 x 4
-            nn.Conv2d(hparams.ndf * 4, 1, 4, 1, 0, bias=False),
+            nn.Conv2d(hparams.ndf * 4, 1, 4, 1, 0),
             nn.Sigmoid(),
         )
 
@@ -107,17 +96,13 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
         if optimizer_idx == 0:
             ## Forward pass real batch through D
             real_output = self.d(real_x).view(-1)
-            real_label = torch.full(
-                (real_x.size(0),), REAL_LABEL, dtype=torch.float32, device=device
-            )
+            real_label = torch.ones((b_size,), device=device)
             real_err = self.criterion(real_output, real_label)
 
-            ## Forward pass fake batch through D
+            ## Generate fake batch and forward pass through D
             noise = torch.randn(b_size, self.hparams.nz, 1, 1, device=device)
             fake_x = self.g(noise)
-            fake_label = torch.full(
-                (fake_x.size(0),), FAKE_LABEL, dtype=torch.float32, device=device
-            )
+            fake_label = torch.zeros((b_size,), device=device)
             fake_output = self.d(fake_x.detach()).view(-1)
             fake_err = self.criterion(fake_output, fake_label)
 
@@ -125,18 +110,17 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
             log_dict = {"d_loss": err_d}
             return {"loss": err_d, "progress_bar": log_dict, "log": log_dict}
 
-        # else we are training generator
+        # If optimizer_idx != 0 we are training G
         noise = torch.randn(b_size, self.hparams.nz, 1, 1, device=device)
         fake_x = self.g(noise)
-
-        ## Forward pass through G using D as criterion
-        output = self.d(fake_x).view(-1)
-        labels = torch.full((b_size,), REAL_LABEL, dtype=torch.float32, device=device)
-        err_g = self.criterion(output, labels)
+        gen_output = self.d(fake_x).view(-1)
+        gen_label = torch.ones((b_size,), device=device)
+        err_g = self.criterion(gen_output, gen_label)
         log_dict = {"g_loss": err_g}
         return {"loss": err_g, "progress_bar": log_dict, "log": log_dict}
 
     def configure_optimizers(self):
+        """For GAN we return two optimizer - order matters as we get `optimizer_idx` in train step"""
         optimizer_d = Adam(
             self.d.parameters(),
             lr=self.hparams.lr,
@@ -170,6 +154,10 @@ class DCGAN(pl.LightningModule):  # pylint: disable=too-many-ancestors
         )
 
     def on_epoch_end(self):
+        """
+        After every epoch we generate and log our images on fixed noise
+        to see progress on the same latent vector over time.
+        """
         z = self.fixed_noise
 
         if self.on_gpu:
@@ -184,9 +172,7 @@ def arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="../data")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--workers", type=int, default=4, help="workers for data loader"
-    )
+    parser.add_argument("--workers", type=int, default=4, help="workers for dataloader")
     parser.add_argument("--batch-size", type=int, default=256, help="mini batch size")
     parser.add_argument("--nc", type=int, default=1, help="number of channels in image")
     parser.add_argument("--nz", type=int, default=100, help="size of z (latent vector)")
@@ -200,13 +186,11 @@ def arg_parser():
 
 def main():
     parser = arg_parser()
-    pl.Trainer.add_argparse_args(parser)
+    parser = pl.Trainer.add_argparse_args(parser)
     args = parser.parse_args()
     pl.seed_everything(args.seed)
     gan = DCGAN(args)
-    trainer = pl.Trainer.from_argparse_args(
-        args, limit_train_batches=0.1, max_steps=100, row_log_interval=1
-    )
+    trainer = pl.Trainer.from_argparse_args(args, row_log_interval=1)
     trainer.fit(gan)
 
 
