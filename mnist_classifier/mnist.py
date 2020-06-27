@@ -14,11 +14,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # pylint: disable=C0330
 
+
 def conv2d_size_out(size, kernel_size, stride):
     return (size - (kernel_size - 1) - 1) // stride + 1
 
 
-class Generator(nn.Module):
+class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
@@ -28,7 +29,6 @@ class Generator(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.dropout2 = nn.Dropout2d(0.5)
         self.fc2 = nn.Linear(128, 10)
-
 
     def forward(self, x):  # pylint: disable=arguments-differ
         x = self.conv1(x)
@@ -117,7 +117,7 @@ def train(
 
 def get_mnist(batch_size, workers):
     train_set = datasets.MNIST(
-        "train",
+        "../data",
         train=True,
         download=True,
         transform=transforms.Compose(
@@ -129,7 +129,7 @@ def get_mnist(batch_size, workers):
     )
 
     valid_set = datasets.MNIST(
-        "train",
+        "../data",
         train=False,
         transform=transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
