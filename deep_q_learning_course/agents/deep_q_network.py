@@ -1,10 +1,26 @@
 import random
 
 import torch
-
-from .network import DeepQNetwork
+from torch import nn
+from torch.optim import Adam
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class _DeepQNetwork(nn.Module):
+    def __init__(self, state_dims, n_classes, hidden_dim=128, lr=0.001):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(*state_dims, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_classes),
+        )
+        self.optimizer = Adam(self.parameters(), lr=lr)
+        self.criterion = nn.MSELoss()
+
+    def forward(self, x):
+        return self.layers(x)
+
 
 class Agent:
     # pylint: disable=too-many-arguments
@@ -18,7 +34,7 @@ class Agent:
         epsilon_decay=0.00001,
         epsilon_min=0.01,
     ):
-        self.q = DeepQNetwork(state_dims, n_actions, lr=lr).to(DEVICE)
+        self.q = _DeepQNetwork(state_dims, n_actions, lr=lr).to(DEVICE)
         self.n_actions = n_actions
         self.state_dims = state_dims
         self.lr = lr  # alpha

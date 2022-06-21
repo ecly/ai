@@ -1,17 +1,20 @@
 import gym
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
-from .agent import Agent
+import matplotlib.pyplot as plt
 
-matplotlib.use("WebAgg")
+from agents import deep_q_network
+from common import utils
 
 def main():
-    env = gym.make("FrozenLake-v1", is_slippery=True)
+    env = gym.make("CartPole-v1")
+    n_states = env.observation_space.shape
+    n_actions = env.action_space.n
     running_win_pct = []
     scores = []
-    agent = Agent()
-    for i in range(500_000):
+    eps = []
+    agent = deep_q_network.Agent(n_states, n_actions)
+    n_games = 10_000
+    for i in range(n_games):
         state = env.reset()
         score = 0
         while True:
@@ -26,12 +29,14 @@ def main():
                 break
 
         scores.append(score)
-        if i % 10_000 == 0:
+        eps.append(agent.epsilon)
+        if i % 10 == 0:
             win_pct = np.mean(scores[-100:])
             running_win_pct.append(win_pct)
             print(f"{i}: {win_pct}, {agent.epsilon}")
 
-    plt.plot(running_win_pct)
+    filename = "cartpole_naive_dqn.png"
+    utils.plot_learning(scores, eps, filename)
     plt.show()
     env.close()
 
